@@ -1,0 +1,9 @@
+*.swp
+*.tmp
+.DS_Store
+test/
+build/
+dist/
+*.log
+config.local
+.env
