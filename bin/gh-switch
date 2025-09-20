@@ -4,21 +4,38 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${SCRIPT_DIR}/../lib"
 
-# Load libraries
-source "${LIB_DIR}/common.sh"
+# Load all libraries
+for lib in "${LIB_DIR}"/*.sh; do
+    source "$lib"
+done
+
+# Version
+VERSION="1.0.0"
+
+# Parse version flag
+if [[ "${1:-}" == "--version" ]] || [[ "${1:-}" == "-v" ]]; then
+    echo "gh-switch version ${VERSION}"
+    exit 0
+fi
 
 # Main entry point
 main() {
-    case "${1:-}" in
-        init|add|use|current|list|help)
-            cmd="cmd_${1}"
+    local cmd="${1:-help}"
+
+    case "$cmd" in
+        init|add|use|current|list|delete|auto|help)
+            cmd="cmd_${cmd}"
             shift
             $cmd "$@"
             ;;
         *)
             cmd_help
+            exit 1
             ;;
     esac
 }
+
+# Ensure config directory on every run
+ensure_config_dir
 
 main "$@"
