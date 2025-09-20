@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/../lib"
+
+# Load libraries
+source "${LIB_DIR}/common.sh"
+
+# Main entry point
+main() {
+    case "${1:-}" in
+        init|add|use|current|list|help)
+            cmd="cmd_${1}"
+            shift
+            $cmd "$@"
+            ;;
+        *)
+            cmd_help
+            ;;
+    esac
+}
+
+main "$@"
