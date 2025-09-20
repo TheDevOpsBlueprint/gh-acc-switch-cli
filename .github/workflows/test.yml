@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Run shellcheck
+      run: |
+        if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+          sudo apt-get install shellcheck
+        else
+          brew install shellcheck
+        fi
+        shellcheck -S error bin/gh-switch lib/*.sh
+
+    - name: Test installation
+      run: |
+        ./install.sh
+        gh-switch --version
+
+    - name: Test commands
+      run: |
+        gh-switch init
+        echo -e "\n\n\n\n" | gh-switch add test
+        gh-switch list
+        gh-switch current
