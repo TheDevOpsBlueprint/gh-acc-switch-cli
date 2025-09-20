@@ -1,0 +1,290 @@
+#!/usr/bin/env bash
+set -e
+
+# gh-switch - GitHub Account Switcher
+# Version 1.0.0
+
+# === Configuration ===
+VERSION="1.0.0"
+GH_SWITCH_DIR="${HOME}/.config/gh-switch"
+PROFILES_DIR="${GH_SWITCH_DIR}/profiles"
+CONFIG_FILE="${GH_SWITCH_DIR}/config"
+SSH_CONFIG="${HOME}/.ssh/config"
+
+# === Colors ===
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# === Common Functions ===
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
+
+ensure_config_dir() {
+    mkdir -p "${GH_SWITCH_DIR}"
+    mkdir -p "${PROFILES_DIR}"
+}
+
+# === Profile Functions ===
+create_profile() {
+    local name="$1" ssh_key="$2" git_name="$3" git_email="$4" github_user="$5"
+    cat > "${PROFILES_DIR}/${name}" <<EOF
+SSH_KEY="${ssh_key}"
+GIT_NAME="${git_name}"
+GIT_EMAIL="${git_email}"
+GITHUB_USER="${github_user}"
+HOST_ALIAS="github.com-${name}"
+EOF
+    log_success "Profile '${name}' created"
+}
+
+load_profile() {
+    local name="$1"
+    local profile_file="${PROFILES_DIR}/${name}"
+    [[ -f "${profile_file}" ]] && source "${profile_file}" && return 0
+    return 1
+}
+
+# === SSH Functions ===
+ssh_host_exists() {
+    grep -q "^Host ${1}$" "${SSH_CONFIG}" 2>/dev/null
+}
+
+backup_ssh_config() {
+    cp "${SSH_CONFIG}" "${SSH_CONFIG}.gh-switch.backup"
+    log_info "SSH config backed up"
+}
+
+add_ssh_host() {
+    local name="$1" ssh_key="$2" host_alias="github.com-${name}"
+
+    if ssh_host_exists "${host_alias}"; then
+        log_info "SSH host ${host_alias} already exists"
+        return 0
+    fi
+
+    cat >> "${SSH_CONFIG}" <<EOF
+
+# GitHub account: ${name}
+Host ${host_alias}
+  HostName github.com
+  User git
+  IdentityFile ${ssh_key}
+  IdentitiesOnly yes
+EOF
+    log_success "Added SSH host ${host_alias}"
+}
+
+remove_ssh_host() {
+    local host="$1"
+    sed -i.bak "/^Host ${host}$/,/^$/d" "${SSH_CONFIG}"
+}
+
+# === Git Config Functions ===
+get_git_config() {
+    local key="$1" scope="${2:-local}"
+    [[ "$scope" == "local" ]] && ! git rev-parse --git-dir &>/dev/null && return 1
+    git config --${scope} --get "${key}" 2>/dev/null
+}
+
+set_git_config() {
+    local key="$1" value="$2" scope="${3:-local}"
+    if [[ "$scope" == "local" ]] && ! git rev-parse --git-dir &>/dev/null; then
+        log_error "Not in a git repository"
+        return 1
+    fi
+    git config --${scope} "${key}" "${value}"
+}
+
+apply_git_profile() {
+    set_git_config "user.name" "${1}" "${3:-local}"
+    set_git_config "user.email" "${2}" "${3:-local}"
+}
+
+update_remote_url() {
+    local profile="$1"
+    local current_url=$(git remote get-url origin 2>/dev/null)
+    if [[ -n "$current_url" ]]; then
+        local new_url=$(echo "$current_url" | sed "s/github\.com[-a-z]*/github.com-${profile}/")
+        git remote set-url origin "$new_url"
+        log_info "Updated origin URL to use ${profile} profile"
+    fi
+}
+
+# === Commands ===
+cmd_init() {
+    echo "Initializing gh-switch..."
+    ensure_config_dir
+
+    [[ ! -f "${CONFIG_FILE}" ]] && cat > "${CONFIG_FILE}" <<EOF
+VERSION=1.0.0
+AUTO_DETECT=true
+DEFAULT_PROFILE=
+EOF
+
+    [[ ! -d "$HOME/.ssh" ]] && mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+    [[ ! -f "${SSH_CONFIG}" ]] && touch "${SSH_CONFIG}" && chmod 600 "${SSH_CONFIG}"
+
+    backup_ssh_config
+    log_success "gh-switch initialized!"
+    echo -e "\nNext steps:\n  1. Add a profile: gh-switch add personal\n  2. Use profile: gh-switch use personal"
+}
+
+cmd_add() {
+    local name="$1"
+    [[ -z "$name" ]] && log_error "Usage: gh-switch add <profile-name>" && exit 1
+
+    echo "Creating profile: ${name}"
+    read -p "SSH key path (~/.ssh/): " ssh_key
+    ssh_key="${ssh_key:-$HOME/.ssh/id_rsa}"
+    read -p "Git name: " git_name
+    read -p "Git email: " git_email
+    read -p "GitHub username: " github_user
+
+    create_profile "$name" "$ssh_key" "$git_name" "$git_email" "$github_user"
+    add_ssh_host "$name" "$ssh_key"
+
+    log_success "Profile ${name} added successfully!"
+    echo "Use 'gh-switch use ${name}' to activate"
+}
+
+cmd_use() {
+    local profile_name="$1" scope="local"
+    [[ -z "$profile_name" ]] && log_error "Usage: gh-switch use <profile> [--global]" && exit 1
+    [[ "$2" == "--global" ]] && scope="global"
+
+    load_profile "$profile_name" || (log_error "Profile '${profile_name}' not found" && exit 1)
+
+    apply_git_profile "${GIT_NAME}" "${GIT_EMAIL}" "${scope}"
+    echo "${profile_name}" > "${GH_SWITCH_DIR}/current"
+
+    git rev-parse --git-dir &>/dev/null && update_remote_url "${profile_name}"
+    log_success "Switched to profile: ${profile_name}"
+}
+
+cmd_current() {
+    local current_file="${GH_SWITCH_DIR}/current"
+    [[ ! -f "$current_file" ]] && echo "No profile currently active" && return
+
+    local profile_name=$(cat "$current_file")
+    if load_profile "$profile_name"; then
+        echo -e "Current profile: ${GREEN}${profile_name}${NC}"
+        echo "  Git user: ${GIT_NAME}"
+        echo "  Git email: ${GIT_EMAIL}"
+        echo "  GitHub user: ${GITHUB_USER}"
+
+        if git rev-parse --git-dir &>/dev/null; then
+            echo -e "\nRepository config:"
+            echo "  user.name: $(get_git_config user.name)"
+            echo "  user.email: $(get_git_config user.email)"
+        fi
+    else
+        log_error "Current profile '${profile_name}' not found"
+    fi
+}
+
+cmd_list() {
+    ensure_config_dir
+    local current_profile=""
+    [[ -f "${GH_SWITCH_DIR}/current" ]] && current_profile=$(cat "${GH_SWITCH_DIR}/current")
+
+    echo -e "Available profiles:\n=================="
+    for profile_file in "${PROFILES_DIR}"/*; do
+        if [[ -f "$profile_file" ]]; then
+            local profile_name=$(basename "$profile_file")
+            source "$profile_file"
+
+            [[ "$profile_name" == "$current_profile" ]] && echo -e "${GREEN}* ${profile_name}${NC} (active)" || echo "  ${profile_name}"
+            echo -e "    User: ${GIT_NAME}\n    Email: ${GIT_EMAIL}\n"
+        fi
+    done
+}
+
+cmd_delete() {
+    local profile_name="$1"
+    [[ -z "$profile_name" ]] && log_error "Usage: gh-switch delete <profile>" && exit 1
+
+    local profile_file="${PROFILES_DIR}/${profile_name}"
+    [[ ! -f "$profile_file" ]] && log_error "Profile '${profile_name}' not found" && exit 1
+
+    read -p "Delete profile '${profile_name}'? (y/n): " confirm
+    [[ "$confirm" != "y" ]] && echo "Cancelled" && exit 0
+
+    remove_ssh_host "github.com-${profile_name}"
+    rm -f "$profile_file"
+
+    if [[ -f "${GH_SWITCH_DIR}/current" ]]; then
+        current=$(cat "${GH_SWITCH_DIR}/current")
+        [[ "$current" == "$profile_name" ]] && rm -f "${GH_SWITCH_DIR}/current"
+    fi
+
+    log_success "Profile '${profile_name}' deleted"
+}
+
+cmd_auto() {
+    if ! git rev-parse --git-dir &>/dev/null; then
+        log_error "Not in a git repository"
+        return 1
+    fi
+
+    local remote_url=$(git remote get-url origin 2>/dev/null)
+    [[ -z "$remote_url" ]] && log_error "No origin remote found" && return 1
+
+    if [[ "$remote_url" =~ github\.com-([a-z]+) ]]; then
+        local detected="${BASH_REMATCH[1]}"
+        log_info "Detected profile: ${detected}"
+        cmd_use "$detected"
+    else
+        log_info "No profile detected for this repository"
+    fi
+}
+
+cmd_help() {
+    cat <<EOF
+gh-switch - GitHub Account Switcher
+
+USAGE:
+    gh-switch <command> [options]
+
+COMMANDS:
+    init            Initialize gh-switch
+    add <name>      Add a new profile
+    use <name>      Switch to a profile
+    current         Show current profile
+    list            List all profiles
+    delete <name>   Delete a profile
+    auto            Auto-detect profile for current repo
+    help            Show this help message
+
+OPTIONS:
+    --global        Apply profile globally (with 'use' command)
+
+EXAMPLES:
+    gh-switch init
+    gh-switch add personal
+    gh-switch use work
+    gh-switch use personal --global
+
+CONFIG:
+    ~/.config/gh-switch/
+EOF
+}
+
+# === Main ===
+[[ "${1:-}" == "--version" ]] || [[ "${1:-}" == "-v" ]] && echo "gh-switch version ${VERSION}" && exit 0
+
+ensure_config_dir
+
+case "${1:-help}" in
+    init|add|use|current|list|delete|auto|help)
+        cmd="cmd_${1}"
+        shift
+        $cmd "$@"
+        ;;
+    *)
+        cmd_help
+        exit 1
+        ;;
+esac
