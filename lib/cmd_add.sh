@@ -4,6 +4,21 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/profile.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/ssh_writer.sh"
 
+validate_ssh_key() {
+    local key_path="$1"
+    if [[ ! -f "$key_path" ]]; then
+        log_error "Error: SSH key file '$key_path' does not exist."
+        return 1
+    fi
+    local perms
+    perms=$(stat -c "%a" "$key_path" 2>/dev/null || stat -f "%Lp" "$key_path")
+    if [[ "$perms" != "600" ]]; then
+        log_error "Error: SSH key file '$key_path' must have 600 permissions."
+        return 1
+    fi
+    return 0
+}
+
 cmd_add() {
     local name="$1"
 
@@ -15,7 +30,12 @@ cmd_add() {
     echo "Creating profile: ${name}"
 
     read -p "SSH key path (~/.ssh/): " ssh_key
+    ssh_key="${ssh_key/#\~/$HOME}"
     ssh_key="${ssh_key:-$HOME/.ssh/id_rsa}"
+
+    if ! validate_ssh_key "$ssh_key"; then
+        exit 1
+    fi
 
     read -p "Git name: " git_name
     read -p "Git email: " git_email
