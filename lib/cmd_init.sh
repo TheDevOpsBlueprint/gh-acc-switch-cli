@@ -33,7 +33,15 @@ EOF
 
     log_success "gh-switch initialized!"
     echo ""
+    
+    # Install shell completions
+    log_info "Installing shell completions..."
+    install_completions
+    
+    echo ""
     echo "Next steps:"
     echo "  1. Add a profile: gh-switch add personal"
     echo "  2. Use profile: gh-switch use personal"
+    echo ""
+    echo "Note: Restart your shell or source your shell config to enable completions"
 }
