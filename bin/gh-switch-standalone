@@ -113,6 +113,172 @@ update_remote_url() {
     fi
 }
 
+# === Shell Detection Functions ===
+detect_shell() {
+    # Check parent process
+    local parent_cmd=$(ps -o comm= -p $PPID 2>/dev/null)
+    
+    # Try to determine shell from parent process
+    if [[ "$parent_cmd" == *"zsh"* ]]; then
+        echo "zsh"
+    elif [[ "$parent_cmd" == *"bash"* ]]; then
+        echo "bash"
+    # Check SHELL environment variable as fallback
+    elif [[ "$SHELL" == *"zsh"* ]]; then
+        echo "zsh"
+    elif [[ "$SHELL" == *"bash"* ]]; then
+        echo "bash"
+    else
+        echo "unknown"
+    fi
+}
+
+install_completions() {
+    local shell_type=$(detect_shell)
+    
+    log_info "Detected shell: $shell_type"
+    
+    case "$shell_type" in
+        bash)
+            install_bash_completions
+            ;;
+        zsh)
+            install_zsh_completions
+            ;;
+        unknown)
+            log_info "Could not detect shell type. Skipping completion installation."
+            log_info "Completions can be manually installed later."
+            return 1
+            ;;
+    esac
+}
+
+install_bash_completions() {
+    local bash_completion_content='#!/usr/bin/env bash
+
+_gh_switch() {
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    # Main commands
+    opts="init add use current list delete auto help"
+
+    case "${prev}" in
+        gh-switch)
+            COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
+            return 0
+            ;;
+        use|delete)
+            # Complete with profile names
+            local profiles=""
+            if [[ -d "$HOME/.config/gh-switch/profiles" ]]; then
+                profiles=$(ls "$HOME/.config/gh-switch/profiles" 2>/dev/null)
+            fi
+            COMPREPLY=( $(compgen -W "${profiles}" -- ${cur}) )
+            return 0
+            ;;
+    esac
+}
+
+complete -F _gh_switch gh-switch'
+
+    # Try different bash completion directories
+    local bash_comp_dirs=(
+        "/etc/bash_completion.d"
+        "/usr/local/etc/bash_completion.d"
+        "$HOME/.bash_completion.d"
+    )
+    
+    for dir in "${bash_comp_dirs[@]}"; do
+        if [[ -d "$dir" ]] && [[ -w "$dir" ]]; then
+            echo "$bash_completion_content" > "$dir/gh-switch"
+            log_success "Bash completions installed to $dir/gh-switch"
+            return 0
+        elif [[ -d "$dir" ]]; then
+            # Directory exists but not writable, try with sudo
+            if echo "$bash_completion_content" | sudo tee "$dir/gh-switch" >/dev/null 2>&1; then
+                log_success "Bash completions installed to $dir/gh-switch (with sudo)"
+                return 0
+            fi
+        fi
+    done
+    
+    # Fallback: create user-level completion directory
+    local user_comp_dir="$HOME/.bash_completion.d"
+    mkdir -p "$user_comp_dir"
+    echo "$bash_completion_content" > "$user_comp_dir/gh-switch"
+    log_success "Bash completions installed to $user_comp_dir/gh-switch"
+    log_info "Add this to your ~/.bashrc: source $user_comp_dir/gh-switch"
+    return 0
+}
+
+install_zsh_completions() {
+    local zsh_completion_content='#compdef gh-switch
+
+_gh_switch() {
+    local commands profiles
+
+    commands=(
+        "init:Initialize gh-switch"
+        "add:Add a new profile"
+        "use:Switch to a profile"
+        "current:Show current profile"
+        "list:List all profiles"
+        "delete:Delete a profile"
+        "auto:Auto-detect profile"
+        "help:Show help"
+    )
+
+    case $state in
+        args)
+            case $words[2] in
+                use|delete)
+                    profiles=(${(f)"$(ls ~/.config/gh-switch/profiles 2>/dev/null)"})
+                    _arguments "*:profile:($profiles)"
+                    ;;
+                *)
+                    _describe "command" commands
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_gh_switch "$@"'
+
+    # Try different zsh completion directories
+    local zsh_comp_dirs=(
+        "/usr/local/share/zsh/site-functions"
+        "/usr/share/zsh/site-functions"
+        "$HOME/.zsh/completions"
+    )
+    
+    for dir in "${zsh_comp_dirs[@]}"; do
+        if [[ -d "$dir" ]] && [[ -w "$dir" ]]; then
+            echo "$zsh_completion_content" > "$dir/_gh-switch"
+            log_success "Zsh completions installed to $dir/_gh-switch"
+            return 0
+        elif [[ -d "$dir" ]]; then
+            # Directory exists but not writable, try with sudo
+            if echo "$zsh_completion_content" | sudo tee "$dir/_gh-switch" >/dev/null 2>&1; then
+                log_success "Zsh completions installed to $dir/_gh-switch (with sudo)"
+                return 0
+            fi
+        fi
+    done
+    
+    # Fallback: create user-level completion directory
+    local user_comp_dir="$HOME/.zsh/completions"
+    mkdir -p "$user_comp_dir"
+    echo "$zsh_completion_content" > "$user_comp_dir/_gh-switch"
+    log_success "Zsh completions installed to $user_comp_dir/_gh-switch"
+    log_info "Add this to your ~/.zshrc: fpath=($user_comp_dir \$fpath)"
+    log_info "Then run: autoload -Uz compinit && compinit"
+    return 0
+}
+
 # === Commands ===
 cmd_init() {
     echo "Initializing gh-switch..."
@@ -129,7 +295,18 @@ EOF
 
     backup_ssh_config
     log_success "gh-switch initialized!"
-    echo -e "\nNext steps:\n  1. Add a profile: gh-switch add personal\n  2. Use profile: gh-switch use personal"
+    echo ""
+    
+    # Install shell completions
+    log_info "Installing shell completions..."
+    install_completions
+    
+    echo ""
+    echo "Next steps:"
+    echo "  1. Add a profile: gh-switch add personal"
+    echo "  2. Use profile: gh-switch use personal"
+    echo ""
+    echo "Note: Restart your shell or source your shell config to enable completions"
 }
 
 cmd_add() {
