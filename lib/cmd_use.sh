@@ -36,11 +36,25 @@ cmd_use() {
 
 update_remote_url() {
     local profile="$1"
-    local current_url=$(git remote get-url origin 2>/dev/null)
-
-    if [[ -n "$current_url" ]]; then
-        local new_url=$(echo "$current_url" | sed "s/github\.com[-a-z]*/github.com-${profile}/")
-        git remote set-url origin "$new_url"
-        log_info "Updated origin URL to use ${profile} profile"
-    fi
+    local remotes
+    remotes=$(git remote)
+    for remote in $remotes; do
+        local current_url
+        current_url=$(git remote get-url "$remote" 2>/dev/null) || continue
+        local new_url=""
+        case "$current_url" in
+            git@github.com:*)
+                [[ "$current_url" != git@github.com-"$profile":* ]] &&
+                    new_url="${current_url/git@github.com:/git@github.com-${profile}:}"
+                ;;
+            https://github.com/*)
+                [[ "$current_url" != https://github.com-"$profile"/* ]] &&
+                    new_url="${current_url/https:\/\/github.com/https:\/\/github.com-${profile}}"
+                ;;
+        esac
+        if [[ -n "$new_url" ]]; then
+            git remote set-url "$remote" "$new_url"
+            log_info "Updated '$remote' remote URL to use ${profile} profile"
+        fi
+    done
 }
