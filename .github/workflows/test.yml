@@ -25,6 +25,9 @@ jobs:
         fi
         shellcheck -S error bin/gh-switch lib/*.sh
 
+    - name: Make install.sh executable
+      run: chmod +x install.sh
+
     - name: Test installation
       run: |
         ./install.sh
