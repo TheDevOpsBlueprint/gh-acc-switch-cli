@@ -72,7 +72,11 @@ else
 fi
 
 # Optional: Install shell completions
-read -p "Install shell completions? (y/n): " install_completions
+if [[ -n "$CI" ]]; then
+    install_completions="n"
+else
+    read -p "Install shell completions? (y/n): " install_completions
+fi
 if [[ "$install_completions" == "y" ]]; then
     if [[ -f "completions/gh-switch.bash" ]] && [[ -d "/etc/bash_completion.d" ]]; then
         sudo cp completions/gh-switch.bash /etc/bash_completion.d/
