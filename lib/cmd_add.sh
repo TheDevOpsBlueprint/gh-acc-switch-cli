@@ -3,6 +3,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/profile.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/ssh_writer.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/gpg_utils.sh"
 
 validate_ssh_key() {
     local key_path="$1"
@@ -41,9 +42,34 @@ cmd_add() {
     read -p "Git email: " git_email
     read -p "GitHub username: " github_user
 
-    create_profile "$name" "$ssh_key" "$git_name" "$git_email" "$github_user"
+    # GPG key setup (optional)
+    local gpg_key=""
+    local gpg_sign="false"
+    
+    if check_gpg_installed; then
+        echo ""
+        log_info "GPG Signing Configuration (Optional)"
+        echo "Would you like to configure GPG commit signing for this profile?"
+        read -p "Configure GPG signing? (y/N): " configure_gpg
+        
+        if [[ "$configure_gpg" =~ ^[Yy]$ ]]; then
+            gpg_key=$(select_gpg_key_interactive)
+            
+            if [[ -n "$gpg_key" ]]; then
+                read -p "Enable GPG signing for all commits? (Y/n): " enable_signing
+                if [[ ! "$enable_signing" =~ ^[Nn]$ ]]; then
+                    gpg_sign="true"
+                fi
+            fi
+        fi
+    fi
+
+    create_profile "$name" "$ssh_key" "$git_name" "$git_email" "$github_user" "$gpg_key" "$gpg_sign"
     add_ssh_host "$name" "$ssh_key"
 
     log_success "Profile ${name} added successfully!"
+    if [[ -n "$gpg_key" ]]; then
+        log_info "GPG signing configured with key: ${gpg_key}"
+    fi
     echo "Use 'gh-switch use ${name}' to activate"
 }

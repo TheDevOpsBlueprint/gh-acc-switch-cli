@@ -26,6 +26,17 @@ cmd_list() {
             fi
             echo "    User: ${GIT_NAME}"
             echo "    Email: ${GIT_EMAIL}"
+            
+            # Display GPG info if available
+            if [[ -n "${GPG_KEY_ID:-}" ]]; then
+                echo "    GPG Key: ${GPG_KEY_ID}"
+                if [[ "${GPG_SIGN_COMMITS:-false}" == "true" ]]; then
+                    echo "    GPG Signing: Enabled"
+                else
+                    echo "    GPG Signing: Manual"
+                fi
+            fi
+            
             echo ""
         fi
     done
