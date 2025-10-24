@@ -11,6 +11,7 @@ A fast, reliable command-line tool for managing multiple GitHub accounts. Switch
 - **Instant Switching**: Change GitHub accounts with a single command
 - **SSH Key Management**: Automatically configures SSH hosts for each profile
 - **Git Config Integration**: Updates user.name and user.email per repository
+- **GPG Signing Support**: Configure GPG signing keys per profile for verified commits
 - **Profile Storage**: Securely stores multiple account profiles
 - **Auto-Detection**: Automatically detects and switches profiles based on repository
 - **Remote URL Updates**: Automatically updates git remote URLs when switching
@@ -85,6 +86,9 @@ gh-switch add personal
 # - Git name: John Doe
 # - Git email: john@personal.com
 # - GitHub username: johndoe
+# - Configure GPG signing? (optional)
+# - GPG key ID: (if GPG is configured)
+# - Enable automatic GPG signing? (if GPG is configured)
 ```
 
 #### Listing Profiles
@@ -99,6 +103,8 @@ gh-switch list
 # * personal (active)
 #     User: John Doe
 #     Email: john@personal.com
+#     GPG Key: ABCD1234EFGH5678
+#     GPG Signing: Enabled
 #   
 #   work
 #     User: John Smith
@@ -221,6 +227,8 @@ Each profile stores:
 - Git email address
 - GitHub username
 - SSH host alias
+- GPG signing key ID (optional)
+- GPG auto-signing preference (optional)
 
 ## 🎨 Command Reference
 
@@ -269,6 +277,7 @@ ghclone() {
 - **OpenSSH**: Standard SSH client
 - **Bash**: Version 4.0+ (macOS/Linux)
 - **GitHub Account**: With SSH keys configured
+- **GPG** (optional): For commit signing (gpg or gpg2)
 
 ### Setting Up SSH Keys
 
@@ -287,6 +296,129 @@ ssh-add ~/.ssh/id_ed25519_work
 ```
 
 Then add each public key to the corresponding GitHub account's settings.
+
+### Setting Up GPG Keys for Signed Commits
+
+GitHub supports GPG-signed commits to verify your identity. gh-switch can manage GPG keys per profile.
+
+#### Generating GPG Keys
+
+```bash
+# Generate a GPG key for personal account
+gpg --full-generate-key
+# Select: (1) RSA and RSA or (9) ECC and ECC
+# Key size: 4096 (for RSA) or use default (for ECC)
+# Expiration: Choose based on your security policy
+# Real name: Your Name
+# Email: personal@email.com
+
+# Generate a GPG key for work account
+gpg --full-generate-key
+# Use your work email: work@company.com
+```
+
+#### List Your GPG Keys
+
+```bash
+# List all GPG keys with their IDs
+gpg --list-secret-keys --keyid-format=long
+
+# Output example:
+# sec   rsa4096/ABCD1234EFGH5678 2024-01-01 [SC]
+# uid                 [ultimate] Your Name <personal@email.com>
+```
+
+The key ID is the part after the `/` (e.g., `ABCD1234EFGH5678`).
+
+#### Add GPG Key to GitHub
+
+```bash
+# Export your public GPG key
+gpg --armor --export ABCD1234EFGH5678
+
+# Copy the output (including BEGIN and END lines)
+# Then add it to GitHub:
+# 1. Go to GitHub Settings → SSH and GPG keys
+# 2. Click "New GPG key"
+# 3. Paste your public key
+```
+
+#### Configure GPG in gh-switch
+
+When adding a new profile, gh-switch will prompt you to configure GPG signing:
+
+```bash
+gh-switch add personal
+
+# You'll be prompted:
+# - SSH key path
+# - Git name
+# - Git email
+# - GitHub username
+# - Configure GPG signing? (y/N)
+# - GPG key ID: ABCD1234EFGH5678
+# - Enable GPG signing for all commits? (Y/n)
+```
+
+For existing profiles, you can delete and re-add them with GPG support:
+
+```bash
+gh-switch delete personal
+gh-switch add personal
+```
+
+#### Verify GPG Signing is Working
+
+```bash
+# Switch to your profile
+gh-switch use personal
+
+# Check current configuration
+gh-switch current
+# Should show:
+#   GPG key: ABCD1234EFGH5678
+#   GPG signing: Enabled
+
+# Make a commit
+git commit -m "Test signed commit"
+
+# Verify the commit is signed
+git log --show-signature -1
+# Should show "Good signature from ..."
+```
+
+#### Manual GPG Configuration
+
+If you prefer to manually sign specific commits:
+
+1. When configuring GPG in gh-switch, answer "n" to "Enable GPG signing for all commits?"
+2. This sets up the signing key but doesn't auto-sign
+3. Sign individual commits with: `git commit -S -m "Your message"`
+
+#### GPG Troubleshooting
+
+**Issue: "gpg: signing failed: No secret key"**
+```bash
+# Ensure the key is in your keyring
+gpg --list-secret-keys
+
+# If missing, import it
+gpg --import your-private-key.asc
+```
+
+**Issue: "gpg: signing failed: Inappropriate ioctl for device"**
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+export GPG_TTY=$(tty)
+
+# Or use gpg-agent
+echo 'use-agent' >> ~/.gnupg/gpg.conf
+```
+
+**Issue: Commits not showing as verified on GitHub**
+- Ensure the GPG key email matches the commit email
+- Check that the public key is added to your GitHub account
+- The key must not be expired or revoked
 
 ## 🧪 Typical Workflows
 

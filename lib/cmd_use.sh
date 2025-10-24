@@ -23,6 +23,7 @@ cmd_use() {
     fi
 
     apply_git_profile "${GIT_NAME}" "${GIT_EMAIL}" "${scope}"
+    apply_git_gpg_config "${GPG_KEY_ID}" "${GPG_SIGN_COMMITS}" "${scope}"
 
     echo "${profile_name}" > "${GH_SWITCH_DIR}/current"
 

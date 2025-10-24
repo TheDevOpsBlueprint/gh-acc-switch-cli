@@ -30,12 +30,15 @@ ensure_config_dir() {
 # === Profile Functions ===
 create_profile() {
     local name="$1" ssh_key="$2" git_name="$3" git_email="$4" github_user="$5"
+    local gpg_key_id="${6:-}" gpg_sign_commits="${7:-false}"
     cat > "${PROFILES_DIR}/${name}" <<EOF
 SSH_KEY="${ssh_key}"
 GIT_NAME="${git_name}"
 GIT_EMAIL="${git_email}"
 GITHUB_USER="${github_user}"
 HOST_ALIAS="github.com-${name}"
+GPG_KEY_ID="${gpg_key_id}"
+GPG_SIGN_COMMITS="${gpg_sign_commits}"
 EOF
     log_success "Profile '${name}' created"
 }
@@ -43,7 +46,13 @@ EOF
 load_profile() {
     local name="$1"
     local profile_file="${PROFILES_DIR}/${name}"
-    [[ -f "${profile_file}" ]] && source "${profile_file}" && return 0
+    if [[ -f "${profile_file}" ]]; then
+        source "${profile_file}"
+        # Set defaults for backward compatibility
+        GPG_KEY_ID="${GPG_KEY_ID:-}"
+        GPG_SIGN_COMMITS="${GPG_SIGN_COMMITS:-false}"
+        return 0
+    fi
     return 1
 }
 
@@ -103,6 +112,28 @@ apply_git_profile() {
     set_git_config "user.email" "${2}" "${3:-local}"
 }
 
+apply_git_gpg_config() {
+    local gpg_key_id="$1" gpg_sign_commits="$2" scope="${3:-local}"
+    if [[ -n "$gpg_key_id" ]]; then
+        set_git_config "user.signingkey" "${gpg_key_id}" "${scope}"
+        log_info "Set GPG signing key: ${gpg_key_id}"
+        if [[ "$gpg_sign_commits" == "true" ]]; then
+            set_git_config "commit.gpgsign" "true" "${scope}"
+            log_info "Enabled automatic GPG commit signing"
+        else
+            set_git_config "commit.gpgsign" "false" "${scope}"
+        fi
+    else
+        if [[ "$scope" == "local" ]] && git rev-parse --git-dir &>/dev/null; then
+            git config --${scope} --unset user.signingkey 2>/dev/null || true
+            git config --${scope} --unset commit.gpgsign 2>/dev/null || true
+        elif [[ "$scope" == "global" ]]; then
+            git config --${scope} --unset user.signingkey 2>/dev/null || true
+            git config --${scope} --unset commit.gpgsign 2>/dev/null || true
+        fi
+    fi
+}
+
 update_remote_url() {
     local profile="$1"
     local current_url=$(git remote get-url origin 2>/dev/null)
@@ -111,6 +142,51 @@ update_remote_url() {
         git remote set-url origin "$new_url"
         log_info "Updated origin URL to use ${profile} profile"
     fi
+}
+
+# === GPG Functions ===
+check_gpg_installed() {
+    command -v gpg &>/dev/null || command -v gpg2 &>/dev/null
+}
+
+get_gpg_cmd() {
+    command -v gpg2 &>/dev/null && echo "gpg2" || command -v gpg &>/dev/null && echo "gpg" || echo ""
+}
+
+list_gpg_keys() {
+    local gpg_cmd=$(get_gpg_cmd)
+    [[ -z "$gpg_cmd" ]] && log_error "GPG is not installed" && return 1
+    echo "Available GPG keys:"
+    echo "==================="
+    $gpg_cmd --list-secret-keys --keyid-format LONG 2>/dev/null | grep -E "^(sec|uid)" | sed 's/^/  /'
+    echo ""
+    echo "Hint: Use the key ID after 'sec' (e.g., 'rsa4096/ABCD1234EFGH5678')"
+    echo "      Extract just the ID part: ABCD1234EFGH5678"
+}
+
+validate_gpg_key() {
+    local key_id="$1" gpg_cmd=$(get_gpg_cmd)
+    [[ -z "$gpg_cmd" ]] && log_error "GPG is not installed" && return 1
+    [[ -z "$key_id" ]] && return 0
+    $gpg_cmd --list-secret-keys "$key_id" &>/dev/null || (log_error "GPG key '$key_id' not found in keyring" && return 1)
+}
+
+select_gpg_key_interactive() {
+    local gpg_cmd=$(get_gpg_cmd)
+    [[ -z "$gpg_cmd" ]] && log_info "GPG is not installed. Skipping GPG key setup." && echo "" && return 0
+    ! $gpg_cmd --list-secret-keys &>/dev/null && log_info "No GPG keys found in keyring. Skipping GPG key setup." && echo "" && return 0
+    echo ""
+    list_gpg_keys
+    local gpg_key=""
+    read -p "GPG key ID (optional, press Enter to skip): " gpg_key
+    if [[ -n "$gpg_key" ]]; then
+        validate_gpg_key "$gpg_key" && echo "$gpg_key" && return 0
+        log_error "Invalid GPG key. Profile will be created without GPG signing."
+        echo ""
+        return 1
+    fi
+    echo ""
+    return 0
 }
 
 # === Shell Detection Functions ===
@@ -320,10 +396,26 @@ cmd_add() {
     read -p "Git email: " git_email
     read -p "GitHub username: " github_user
 
-    create_profile "$name" "$ssh_key" "$git_name" "$git_email" "$github_user"
+    local gpg_key="" gpg_sign="false"
+    if check_gpg_installed; then
+        echo ""
+        log_info "GPG Signing Configuration (Optional)"
+        echo "Would you like to configure GPG commit signing for this profile?"
+        read -p "Configure GPG signing? (y/N): " configure_gpg
+        if [[ "$configure_gpg" =~ ^[Yy]$ ]]; then
+            gpg_key=$(select_gpg_key_interactive)
+            if [[ -n "$gpg_key" ]]; then
+                read -p "Enable GPG signing for all commits? (Y/n): " enable_signing
+                [[ ! "$enable_signing" =~ ^[Nn]$ ]] && gpg_sign="true"
+            fi
+        fi
+    fi
+
+    create_profile "$name" "$ssh_key" "$git_name" "$git_email" "$github_user" "$gpg_key" "$gpg_sign"
     add_ssh_host "$name" "$ssh_key"
 
     log_success "Profile ${name} added successfully!"
+    [[ -n "$gpg_key" ]] && log_info "GPG signing configured with key: ${gpg_key}"
     echo "Use 'gh-switch use ${name}' to activate"
 }
 
@@ -335,6 +427,7 @@ cmd_use() {
     load_profile "$profile_name" || (log_error "Profile '${profile_name}' not found" && exit 1)
 
     apply_git_profile "${GIT_NAME}" "${GIT_EMAIL}" "${scope}"
+    apply_git_gpg_config "${GPG_KEY_ID}" "${GPG_SIGN_COMMITS}" "${scope}"
     echo "${profile_name}" > "${GH_SWITCH_DIR}/current"
 
     git rev-parse --git-dir &>/dev/null && update_remote_url "${profile_name}"
@@ -351,11 +444,20 @@ cmd_current() {
         echo "  Git user: ${GIT_NAME}"
         echo "  Git email: ${GIT_EMAIL}"
         echo "  GitHub user: ${GITHUB_USER}"
+        
+        if [[ -n "${GPG_KEY_ID:-}" ]]; then
+            echo "  GPG key: ${GPG_KEY_ID}"
+            [[ "${GPG_SIGN_COMMITS:-false}" == "true" ]] && echo "  GPG signing: Enabled" || echo "  GPG signing: Manual"
+        fi
 
         if git rev-parse --git-dir &>/dev/null; then
             echo -e "\nRepository config:"
             echo "  user.name: $(get_git_config user.name)"
             echo "  user.email: $(get_git_config user.email)"
+            local signing_key=$(get_git_config user.signingkey)
+            local gpg_sign=$(get_git_config commit.gpgsign)
+            [[ -n "$signing_key" ]] && echo "  user.signingkey: ${signing_key}"
+            [[ -n "$gpg_sign" ]] && echo "  commit.gpgsign: ${gpg_sign}"
         fi
     else
         log_error "Current profile '${profile_name}' not found"
@@ -374,7 +476,13 @@ cmd_list() {
             source "$profile_file"
 
             [[ "$profile_name" == "$current_profile" ]] && echo -e "${GREEN}* ${profile_name}${NC} (active)" || echo "  ${profile_name}"
-            echo -e "    User: ${GIT_NAME}\n    Email: ${GIT_EMAIL}\n"
+            echo "    User: ${GIT_NAME}"
+            echo "    Email: ${GIT_EMAIL}"
+            if [[ -n "${GPG_KEY_ID:-}" ]]; then
+                echo "    GPG Key: ${GPG_KEY_ID}"
+                [[ "${GPG_SIGN_COMMITS:-false}" == "true" ]] && echo "    GPG Signing: Enabled" || echo "    GPG Signing: Manual"
+            fi
+            echo ""
         fi
     done
 }
